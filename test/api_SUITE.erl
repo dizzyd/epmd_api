@@ -37,7 +37,8 @@ all() ->
     [register_should_work,
      register_proc_death_should_unregister,
      lookup_should_accept_fq_node,
-     service_name_should_append].
+     service_name_should_append,
+     fq_name_should_override_host].
 
 init_per_suite(Config) ->
     %% Make sure epmd is running
@@ -77,6 +78,11 @@ service_name_should_append(_Config) ->
     <<"node.service2@foobar">> = epmd_api:service_name("node@foobar", service2),
     <<"node.service3@barbaz">> = epmd_api:service_name(<<"node@barbaz">>, <<"service3">>).
 
+fq_name_should_override_host(_Config) ->
+    {ok, Pid} = epmd_api:reg(#epmd_node { name = 'regtest4@localhost', port = 1237 },
+                             "example.com"),
+    {ok, #epmd_node{ port = 1237 }} = epmd_api:lookup(regtest4).
+    
 
 
 

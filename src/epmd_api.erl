@@ -75,6 +75,9 @@ reg(Node) ->
 %% requested name. When the process exits, the requested name will be
 %% de-registered with EPMD.
 %%
+%% Also note that if a fully qualified node name is provided in the #epmd_node
+%% record, it will override the Host parameter.
+%%
 reg(Node, Host) ->
     reg_internal(Node, Host, self()).
 
@@ -184,21 +187,30 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal functions
 %% ====================================================================
 
-reg_internal(Node, Host, LinkToPid) ->
-    N2 = normalize_rec(Node),
+reg_internal(Node, RequestedHost, LinkToPid) ->
+    {N2, FinalHost} = normalize_rec(Node, RequestedHost),
     {ok, Pid} = gen_server:start(?MODULE, [LinkToPid], []),
-    gen_server:call(Pid, {register, N2, Host}).
+    gen_server:call(Pid, {register, N2, FinalHost}).
     
     
-
-normalize_rec(Node) ->
-    %% Make sure the node name is a binary string, all the version numbers are
-    %% initialized (if they are undefined) and clear the "extra" field (due to
-    %% bugs in the epmd daemon).
-    Node#epmd_node { name     = to_binstr(Node#epmd_node.name),
-                     high_vsn = if_undefined(Node#epmd_node.high_vsn, epmd_dist_high()),
-                     low_vsn  = if_undefined(Node#epmd_node.low_vsn, epmd_dist_low()),
-                     extra    = <<>> }.
+%%
+%% Cleanup the epmd_node record and make sure all fields are properly initialized.
+%%
+normalize_rec(Node, RequestedHost) ->
+    %% First, see if the requested name is actually a fully-qualfied node name; if it
+    %% is, parse it out and use that hostname in lieu of the requested host
+    case parse_fq_node(to_binstr(Node#epmd_node.name)) of
+        {Name, <<>>} ->
+            FinalHost = RequestedHost;
+        {Name, Host} ->
+            FinalHost = binary_to_list(Host)
+    end,
+    
+    N2 = Node#epmd_node { name = Name,
+                          high_vsn = if_undefined(Node#epmd_node.high_vsn, epmd_dist_high()),
+                          low_vsn  = if_undefined(Node#epmd_node.low_vsn, epmd_dist_low()),
+                          extra    = <<>> },
+    {N2, FinalHost}.
 
 
 
