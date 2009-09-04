@@ -35,7 +35,9 @@
 
 all() ->
     [register_should_work,
-     register_proc_death_should_unregister].
+     register_proc_death_should_unregister,
+     lookup_should_accept_fq_node,
+     service_name_should_append].
 
 init_per_suite(Config) ->
     %% Make sure epmd is running
@@ -55,6 +57,7 @@ register_should_work(_Config) ->
     {ok, _Pid} = epmd_api:reg(#epmd_node { name = foobar, port = 1234 }),
     {ok, #epmd_node{ port = 1234 }} = epmd_api:lookup(foobar).
 
+
 register_proc_death_should_unregister(_Config) ->
     {ok, Pid} = epmd_api:reg(#epmd_node { name = regtest2, port = 1235 }),
     {ok, #epmd_node{ port = 1235 }} = epmd_api:lookup(regtest2),
@@ -62,6 +65,17 @@ register_proc_death_should_unregister(_Config) ->
     unlink_and_kill(Pid),
 
     not_found = epmd_api:lookup(regtest2).
+
+
+lookup_should_accept_fq_node(_Config) ->
+    {ok, Pid} = epmd_api:reg(#epmd_node { name = regtest3, port = 1236 }),
+    {ok, #epmd_node{ port = 1236 }} = epmd_api:lookup('regtest3@localhost').
+
+
+service_name_should_append(_Config) ->
+    <<"node.service@localhost">> = epmd_api:service_name('node@localhost', 'service'),
+    <<"node.service2@foobar">> = epmd_api:service_name("node@foobar", service2),
+    <<"node.service3@barbaz">> = epmd_api:service_name(<<"node@barbaz">>, <<"service3">>).
 
 
 
