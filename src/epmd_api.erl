@@ -32,7 +32,9 @@
 
 %% API
 -export([reg/1, reg/2,
-         lookup/1, lookup/2]).
+         reg_linkto/2, reg_linkto/3,
+         lookup/1, lookup/2,
+         service_name/2]).
 
 
 %% gen_server callbacks
@@ -63,7 +65,7 @@
 %% @see reg/2
 %%
 reg(Node) ->
-    reg(Node, "localhost").
+    reg_internal(Node, "localhost", self()).
 
 
 %%
@@ -74,15 +76,37 @@ reg(Node) ->
 %% de-registered with EPMD.
 %%
 reg(Node, Host) ->
-    N2 = normalize_rec(Node),
-    {ok, Pid} = gen_server:start_link(?MODULE, [], []),
-    gen_server:call(Pid, {register, N2, Host}).
+    reg_internal(Node, Host, self()).
+
 
 %%
-%% Retrieve the #epmd_node information for the specified name from the local EPMD
+%% Register a #epmd_node record with the local EPMD and link to the provided PID
+%% instead of the calling process.
+%%
+reg_linkto(Node, Pid) ->
+    reg_internal(Node, "localhost", Pid).
+
+
+%%
+%% Register a #epmd_node record with the EPMD on Host and link to the provided PID
+%% instead of the calling process.
+%%
+reg_linkto(Node, Host, Pid) ->
+    reg_internal(Node, Host, Pid).
+    
+
+%%
+%% Retrieve the #epmd_node information for the specified name. If the name contains an '@',
+%% it is assumed that this is a fully-qualified node name and the lookup will happen
+%% against the specified host. Otherwise, the local EPMD is used.
 %%
 lookup(Name) ->
-    lookup(to_binstr(Name), "localhost").
+    case parse_fq_node(to_binstr(Name)) of
+        {Node, <<>>} ->
+            lookup(Node, "localhost");
+        {Node, Host} ->
+            lookup(Node, binary_to_list(Host))
+    end.
 
 %%
 %% Retrieve the #epmd_node record for the specified name from the EPMD running on Host.
@@ -95,13 +119,25 @@ lookup(Name, Host) ->
             {error, Reason}
     end.
 
+%%
+%% Parse the provided node name and concatenate the service on the end.
+%%
+service_name(Name, Service) ->
+    case parse_fq_node(to_binstr(Name)) of
+        {Node, <<>>} ->
+            <<Node/binary, ".", (to_binstr(Service))/binary>>;
+        {Node, Host} ->
+            <<Node/binary, ".", (to_binstr(Service))/binary, "@", Host/binary>>
+    end.
+    
 
 
 %% ====================================================================
 %% gen_server callbacks
 %% ====================================================================
 
-init([]) ->
+init([Pid]) ->
+    link(Pid),
     {ok, #state{}}.
 
 handle_call({register, Node, Host}, _From, State) ->
@@ -119,6 +155,7 @@ handle_call({register, Node, Host}, _From, State) ->
         {error, Reason} ->
             {stop, {error, Reason}, {error, Reason}, State}
     end.
+    
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -147,6 +184,13 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal functions
 %% ====================================================================
 
+reg_internal(Node, Host, LinkToPid) ->
+    N2 = normalize_rec(Node),
+    {ok, Pid} = gen_server:start(?MODULE, [LinkToPid], []),
+    gen_server:call(Pid, {register, N2, Host}).
+    
+    
+
 normalize_rec(Node) ->
     %% Make sure the node name is a binary string, all the version numbers are
     %% initialized (if they are undefined) and clear the "extra" field (due to
@@ -156,6 +200,23 @@ normalize_rec(Node) ->
                      low_vsn  = if_undefined(Node#epmd_node.low_vsn, epmd_dist_low()),
                      extra    = <<>> }.
 
+
+
+%%
+%% Parse a node name into {Node, Host} components (where both are binaries)
+%%
+parse_fq_node(BinStr) ->
+    split_bin_str(BinStr, $@, <<>>).
+
+%%
+%% Split a binary string at the first occurrence of the Delimiter
+%%
+split_bin_str(<<>>, _Delimiter, Acc) ->
+    {Acc, <<>>};
+split_bin_str(<<Delimiter:8, Rest/binary>>, Delimiter, Acc) ->
+    {Acc, Rest};
+split_bin_str(<<Other:8, Rest/binary>>, Delimiter, Acc) ->
+    split_bin_str(Rest, Delimiter, <<Acc/binary, Other:8>>).
 
 %%
 %% Convert an atom, string or binary to a binary.
@@ -169,7 +230,7 @@ to_binstr(Bin) when is_binary(Bin) -> Bin.
 %%
 if_undefined(undefined, Other) -> Other;
 if_undefined(Value, _Other)    -> Value.
-    
+
     
 do_connect(Host, Timeout) ->
     gen_tcp:connect(Host, get_epmd_port(),
