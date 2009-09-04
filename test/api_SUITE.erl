@@ -38,7 +38,8 @@ all() ->
      register_proc_death_should_unregister,
      lookup_should_accept_fq_node,
      service_name_should_append,
-     fq_name_should_override_host].
+     fq_name_should_override_host,
+     lookup_port_should_return_just_port].
 
 init_per_suite(Config) ->
     %% Make sure epmd is running
@@ -83,7 +84,11 @@ fq_name_should_override_host(_Config) ->
                              "example.com"),
     {ok, #epmd_node{ port = 1237 }} = epmd_api:lookup(regtest4).
     
+lookup_port_should_return_just_port(_Config) ->
+    {ok, Pid} = epmd_api:reg(#epmd_node { name = regtest5, port = 1238 }),
+    {ok, 1238} = epmd_api:lookup_port(regtest5),
 
+    not_found = epmd_api:lookup_port(no_such_name).
 
 
 %% ====================================================================

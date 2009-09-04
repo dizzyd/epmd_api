@@ -34,6 +34,7 @@
 -export([reg/1, reg/2,
          reg_linkto/2, reg_linkto/3,
          lookup/1, lookup/2,
+         lookup_port/1,
          service_name/2]).
 
 
@@ -118,6 +119,19 @@ lookup(Name, Host) ->
     case do_connect(Host, 2500) of
         {ok, Socket} ->
             do_lookup_node(Socket, Name, 2500); 
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%%
+%% Retrieve just the port number for the specified name
+%%
+lookup_port(Name) ->
+    case lookup(Name) of
+        {ok, Node} ->
+            {ok, Node#epmd_node.port};
+        not_found ->
+            not_found;
         {error, Reason} ->
             {error, Reason}
     end.
