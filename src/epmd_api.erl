@@ -315,12 +315,14 @@ wait_for_lookup_response(Data, Socket, Timeout) ->
                 <<?EPMD_PORT2_RESP:8, 0:8, Port:16, NodeType:8,
                   Protocol:8, HighVsn:16, LowVsn:16,
                   Nlen:16, Name:Nlen/binary, _Rest/binary>> ->
+                    {ok, {IpAddr, _}} = inet:peername(Socket),
                     gen_tcp:close(Socket),
                     case NodeType of
                         72 -> Hidden = true;
                         77 -> Hidden = false
                     end,
                     {ok, #epmd_node { name   = Name,
+                                      ip     = IpAddr,
                                       port   = Port,
                                       hidden = Hidden,
                                       protocol = Protocol,
