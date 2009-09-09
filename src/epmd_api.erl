@@ -305,17 +305,19 @@ wait_for_register_response(Data, Timeout) ->
             
 do_lookup_node(Socket, Name, Timeout) ->
     Request = <<(size(Name)+1):16, ?EPMD_PORT_PLEASE2_REQ:8, Name/binary>>,
-    gen_tcp:send(Socket, Request),
-    wait_for_lookup_response(<<>>, Socket, Timeout).
+    %% Get the peer name BEFORE we send the request -- otherwise it's a race condition
+    %% as to whether we can get it before the socket is closed.
+    {ok, {IpAddr, _}} = inet:peername(Socket),
+    ok = gen_tcp:send(Socket, Request),
+    wait_for_lookup_response(<<>>, IpAddr, Socket, Timeout).
     
-wait_for_lookup_response(Data, Socket, Timeout) ->
+wait_for_lookup_response(Data, IpAddr, Socket, Timeout) ->
     receive
         {tcp, Socket, Payload} ->
             case <<Data/binary, Payload/binary>> of
                 <<?EPMD_PORT2_RESP:8, 0:8, Port:16, NodeType:8,
                   Protocol:8, HighVsn:16, LowVsn:16,
                   Nlen:16, Name:Nlen/binary, _Rest/binary>> ->
-                    {ok, {IpAddr, _}} = inet:peername(Socket),
                     gen_tcp:close(Socket),
                     case NodeType of
                         72 -> Hidden = true;
@@ -332,7 +334,7 @@ wait_for_lookup_response(Data, Socket, Timeout) ->
                     gen_tcp:close(Socket),
                     not_found;
                 Other ->
-                    wait_for_lookup_response(Other, Socket, Timeout)
+                    wait_for_lookup_response(Other, IpAddr, Socket, Timeout)
             end;
         {tcp_closed, Socket} ->
             {error, epmd_closed};
