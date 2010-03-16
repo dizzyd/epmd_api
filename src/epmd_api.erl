@@ -55,6 +55,10 @@
 
 -include("epmd_api.hrl").
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 
 %% ====================================================================
 %% API
@@ -97,7 +101,7 @@ reg_linkto(Node, Pid) ->
 %%
 reg_linkto(Node, Host, Pid) ->
     reg_internal(Node, Host, Pid).
-    
+
 
 %%
 %% Retrieve the #epmd_node information for the specified name. If the name contains an '@',
@@ -118,7 +122,7 @@ lookup(Name) ->
 lookup(Name, Host) ->
     case do_connect(Host, 2500) of
         {ok, Socket} ->
-            do_lookup_node(Socket, Name, 2500); 
+            do_lookup_node(Socket, Name, 2500);
         {error, Reason} ->
             {error, Reason}
     end.
@@ -146,7 +150,7 @@ service_name(Name, Service) ->
         {Node, Host} ->
             <<Node/binary, ".", (to_binstr(Service))/binary, "@", Host/binary>>
     end.
-    
+
 
 
 %% ====================================================================
@@ -172,7 +176,7 @@ handle_call({register, Node, Host}, _From, State) ->
         {error, Reason} ->
             {stop, {error, Reason}, {error, Reason}, State}
     end.
-    
+
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -205,8 +209,7 @@ reg_internal(Node, RequestedHost, LinkToPid) ->
     {N2, FinalHost} = normalize_rec(Node, RequestedHost),
     {ok, Pid} = gen_server:start(?MODULE, [LinkToPid], []),
     gen_server:call(Pid, {register, N2, FinalHost}).
-    
-    
+
 %%
 %% Cleanup the epmd_node record and make sure all fields are properly initialized.
 %%
@@ -219,7 +222,7 @@ normalize_rec(Node, RequestedHost) ->
         {Name, Host} ->
             FinalHost = binary_to_list(Host)
     end,
-    
+
     N2 = Node#epmd_node { name = Name,
                           high_vsn = if_undefined(Node#epmd_node.high_vsn, epmd_dist_high()),
                           low_vsn  = if_undefined(Node#epmd_node.low_vsn, epmd_dist_low()),
@@ -257,11 +260,11 @@ to_binstr(Bin) when is_binary(Bin) -> Bin.
 if_undefined(undefined, Other) -> Other;
 if_undefined(Value, _Other)    -> Value.
 
-    
+
 do_connect(Host, Timeout) ->
     gen_tcp:connect(Host, get_epmd_port(),
                     [binary, {active, true}], Timeout).
-        
+
 
 do_register_node(Socket, Node, Timeout) ->
     case Node#epmd_node.hidden of
@@ -301,8 +304,8 @@ wait_for_register_response(Data, Timeout) ->
     after Timeout ->
             {error, epmd_not_responding}
     end.
-    
-            
+
+
 do_lookup_node(Socket, Name, Timeout) ->
     Request = <<(size(Name)+1):16, ?EPMD_PORT_PLEASE2_REQ:8, Name/binary>>,
     %% Get the peer name BEFORE we send the request -- otherwise it's a race condition
@@ -310,7 +313,7 @@ do_lookup_node(Socket, Name, Timeout) ->
     {ok, {IpAddr, _}} = inet:peername(Socket),
     ok = gen_tcp:send(Socket, Request),
     wait_for_lookup_response(<<>>, IpAddr, Socket, Timeout).
-    
+
 wait_for_lookup_response(Data, IpAddr, Socket, Timeout) ->
     receive
         {tcp, Socket, Payload} ->
@@ -345,7 +348,7 @@ wait_for_lookup_response(Data, IpAddr, Socket, Timeout) ->
             {error, epmd_not_responding}
     end.
 
-               
+
 
 %% ====================================================================
 %% Functions from erl_epmd.erl
@@ -362,7 +365,7 @@ get_epmd_port() ->
 epmd_dist_high() ->
     case os:getenv("ERL_EPMD_DIST_HIGH") of
 	false ->
-	   ?ERL_EPMD_DIST_HIGH; 
+	   ?ERL_EPMD_DIST_HIGH;
 	Version ->
 	    case (catch list_to_integer(Version)) of
 		N when is_integer(N), N < ?ERL_EPMD_DIST_HIGH ->
@@ -375,7 +378,7 @@ epmd_dist_high() ->
 epmd_dist_low() ->
     case os:getenv("ERL_EPMD_DIST_LOW") of
 	false ->
-	   ?ERL_EPMD_DIST_LOW; 
+	   ?ERL_EPMD_DIST_LOW;
 	Version ->
 	    case (catch list_to_integer(Version)) of
 		N when is_integer(N), N > ?ERL_EPMD_DIST_LOW ->
@@ -384,9 +387,63 @@ epmd_dist_low() ->
 		   ?ERL_EPMD_DIST_LOW
 	    end
     end.
-		    
 
 
+%% ====================================================================
+%% Unit Tests
+%% ====================================================================
+-ifdef(TEST).
+
+all_test_() ->
+    [{setup, fun() -> os:cmd("epmd -daemon") end,
+      [fun register_should_work/0,
+       fun register_proc_death_should_unregister/0,
+       fun lookup_should_accept_fq_node/0,
+       fun service_name_should_append/0,
+       fun fq_name_should_override_host/0,
+       fun lookup_port_should_return_just_port/0]}].
 
 
-                                                      
+register_should_work() ->
+    {ok, _Pid} = epmd_api:reg(#epmd_node { name = foobar, port = 1234 }),
+    {ok, #epmd_node{ port = 1234 }} = epmd_api:lookup(foobar).
+
+
+register_proc_death_should_unregister() ->
+    {ok, Pid} = epmd_api:reg(#epmd_node { name = regtest2, port = 1235 }),
+    {ok, #epmd_node{ port = 1235 }} = epmd_api:lookup(regtest2),
+
+    %% Unlink the PID, kill it and wait for it to exit
+    unlink(Pid),
+    Mref = erlang:monitor(process, Pid),
+    exit(Pid, kill),
+    receive
+        {'DOWN', Mref, _, _, _} ->
+            ok
+    end,
+
+    not_found = epmd_api:lookup(regtest2).
+
+
+lookup_should_accept_fq_node() ->
+    {ok, _Pid} = epmd_api:reg(#epmd_node { name = regtest3, port = 1236 }),
+    {ok, #epmd_node{ port = 1236 }} = epmd_api:lookup('regtest3@localhost').
+
+
+service_name_should_append() ->
+    <<"node.service@localhost">> = epmd_api:service_name('node@localhost', 'service'),
+    <<"node.service2@foobar">> = epmd_api:service_name("node@foobar", service2),
+    <<"node.service3@barbaz">> = epmd_api:service_name(<<"node@barbaz">>, <<"service3">>).
+
+fq_name_should_override_host() ->
+    {ok, _Pid} = epmd_api:reg(#epmd_node { name = 'regtest4@localhost', port = 1237 },
+                             "example.com"),
+    {ok, #epmd_node{ port = 1237 }} = epmd_api:lookup(regtest4).
+
+lookup_port_should_return_just_port() ->
+    {ok, _Pid} = epmd_api:reg(#epmd_node { name = regtest5, port = 1238 }),
+    {ok, 1238} = epmd_api:lookup_port(regtest5),
+
+    not_found = epmd_api:lookup_port(no_such_name).
+
+-endif.
